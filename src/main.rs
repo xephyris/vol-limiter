@@ -212,8 +212,13 @@ impl VolControl {
                         Task::perform(async {}, move |_| Message::EnableLimit),
                     ])
                 } else {
-                    self.volume = if let Ok(new) = self.vol_str.parse::<u8>() {if new <= 100 {new} else {100}} else {self.error = Some(Error::ParseError); self.error_length = 0; self.volume};
-                    self.vol_str = self.volume.to_string();
+                    if !self.limiter {
+                        self.volume = if let Ok(new) = self.vol_str.parse::<u8>() {if new <= 100 {new} else {100}} else {self.error = Some(Error::ParseError); self.error_length = 0; self.volume};
+                        self.vol_str = self.volume.to_string();
+                    } else {
+                        self.volume = if let Ok(new) = self.vol_str.parse::<u8>() {if new <= self.percent {new} else {self.percent}} else {self.error = Some(Error::ParseError); self.error_length = 0; self.volume};
+                        self.vol_str = self.volume.to_string();
+                    }
                     set_system_volume(self.volume);
                     Task::none()
                 }
@@ -342,6 +347,7 @@ impl VolControl {
                         } else if self.volume > 0 {
                             self.volume -= 1;
                         }
+                        cpvc::set_system_volume(self.volume);
                         self.vol_str = self.volume.to_string();
                         Task::none()
                     } else {
@@ -355,6 +361,7 @@ impl VolControl {
             Message::SystemVolChange => {
                 if cpvc::get_system_volume() != self.volume {
                     self.volume = cpvc::get_system_volume();
+                    self.vol_str = self.volume.to_string();
                 }
                 Task::none()
             },
@@ -367,6 +374,7 @@ impl VolControl {
                     if volume != self.volume {
                         set_system_volume(volume);
                         self.volume = volume;
+                        self.vol_str = self.volume.to_string();
                     }
                 }
                 Task::none()
