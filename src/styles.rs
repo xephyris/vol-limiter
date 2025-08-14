@@ -1,5 +1,5 @@
 
-use iced::Color;
+use iced::{border::Radius, Color};
 
 pub fn get_rgb_color(r: u8, g: u8, b: u8) -> Color {
     Color::from_rgb(r as f32 / 255f32, g as f32 / 255f32, b as f32 /255f32)
@@ -7,6 +7,10 @@ pub fn get_rgb_color(r: u8, g: u8, b: u8) -> Color {
 // #[allow(dead_code)]
 pub fn get_rgba_color(r: u8, g: u8, b: u8, a: u8) -> Color {
     Color::from_rgba(r as f32 / 255f32, g as f32 / 255f32, b as f32 /255f32, a as f32 / 255f32)
+}
+
+pub fn equal_radius(radius: u32) -> Radius{
+    Radius{ top_left: radius as f32, top_right: radius as f32, bottom_right: radius as f32, bottom_left: radius as f32 }
 }
 pub mod buttons {
     use iced::widget::button;
