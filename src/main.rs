@@ -187,10 +187,30 @@ impl VolControl {
                 Task::none()
             },
             Message::ConfirmPercent(limit) => {
-                if limit {
+                if limit && !self.limiter{
                     self.percent = if let Ok(new) = self.percent_str.parse::<u8>() {if new <= 100 {new} else {100}} else {self.error = Some(Error::ParseError); self.error_length = 0; self.percent};
                     self.percent_str = self.percent.to_string();
+                    match self.percent {
+                        20 => {
+                            self.sel_lim.replace(BuiltIn::Twenty);
+                        },
+                        50 => {
+                            self.sel_lim.replace(BuiltIn::Fifty);
+                        },
+                        80 => {
+                            self.sel_lim.replace(BuiltIn::Eighty);
+                        },
+                        _ => {
+                            self.sel_lim.replace(BuiltIn::Custom);
+                        },
+                    }
                     Task::none()
+                } else if limit && self.limiter {
+                    Task::batch(vec![
+                        Task::perform(async {}, move |_| Message::DisableLimit),
+                        Task::perform(async {}, move |_| Message::ConfirmPercent(limit)),
+                        Task::perform(async {}, move |_| Message::EnableLimit),
+                    ])
                 } else {
                     self.volume = if let Ok(new) = self.vol_str.parse::<u8>() {if new <= 100 {new} else {100}} else {self.error = Some(Error::ParseError); self.error_length = 0; self.volume};
                     self.vol_str = self.volume.to_string();
@@ -284,8 +304,29 @@ impl VolControl {
                         } else if self.percent > 0 {
                             self.percent -= 1;
                         }
+                        match self.percent {
+                            20 => {
+                                self.sel_lim.replace(BuiltIn::Twenty);
+                            },
+                            50 => {
+                                self.sel_lim.replace(BuiltIn::Fifty);
+                            },
+                            80 => {
+                                self.sel_lim.replace(BuiltIn::Eighty);
+                            },
+                            _ => {
+                                self.sel_lim.replace(BuiltIn::Custom);
+                            },
+                        }
                         self.percent_str = self.percent.to_string();
                         Task::none()
+                    } else if self.limiter {
+                         Task::batch(vec![
+                            Task::perform(async {}, move |_| Message::DisableLimit),
+                            Task::perform(async {}, move |_| Message::ConfirmPercent(limit)),
+                            Task::perform(async {}, move |_| Message::ChangeByOne(increase, limit)),
+                            Task::perform(async {}, move |_| Message::EnableLimit),
+                        ])
                     } else {
                         Task::batch(vec![
                             Task::perform(async {}, move |_| Message::ConfirmPercent(limit)),
@@ -356,11 +397,15 @@ impl VolControl {
                         self.percent_str = self.percent.to_string();
                     }
                     self.sel_lim.replace(new);
+                    task
                 } else {
-                    self.error = Some(Error::AdjustWhileOn);
-                    self.error_length = 0;
+                    Task::batch(vec![
+                        Task::perform(async {}, move |_| Message::DisableLimit),
+                        Task::perform(async {}, move |_| Message::ChangeLimitSel(new)),
+                        Task::perform(async {}, move |_| Message::EnableLimit),
+                    ])
                 }
-                task
+                
             },
             Message::ChangeVolInput(new) => {
                 self.input_vol.replace(new);
@@ -480,14 +525,15 @@ impl VolControl {
                         if self.sel_lim == Some(BuiltIn::Custom) {
                             Some(
                                 text_input(&self.percent.to_string(), &self.percent_str)
-                                    .on_input_maybe(if !self.limiter {Some(|input| Message::ChangePercent(input, true))} else {None} )
+                                    // .on_input_maybe(if !self.limiter {Some(|input| Message::ChangePercent(input, true))} else {None} )
+                                    .on_input(|input| Message::ChangePercent(input, true))
                                     .on_submit(Message::ConfirmPercent(true))
                                     .size(14)
                                     .style(
                                         move |_: &Theme, status| {
                                             match status {
                                                 _ => {
-                                                    if self.error == Some(Error::ParseError) && !self.limiter {
+                                                    if self.error == Some(Error::ParseError) {
                                                         text_input::Style{
                                                             border: iced::Border{color: get_rgb_color(255, 0, 0), width: 1.0, ..Default::default()},
                                                             value: get_rgb_color(255, 0, 0),
@@ -499,7 +545,7 @@ impl VolControl {
                                                     } else {
                                                         text_input::Style{
                                                             border: iced::Border{color:get_rgb_color(150, 150, 150), width: 1.0, ..Default::default()},
-                                                            value: if self.limiter { get_rgb_color(150, 150, 150)} else { get_rgb_color(255, 255, 255) },
+                                                            value: get_rgb_color(255, 255, 255),
                                                             background: iced::Background::Color(get_rgb_color(100, 100, 100)),
                                                             icon: iced::Color::default(),
                                                             placeholder: get_rgb_color(200, 200, 200),
@@ -514,7 +560,7 @@ impl VolControl {
                         } else {
                             None
                         }
-                    ).align_y(Alignment::Center).spacing(20)
+                    ).align_y(Alignment::Center).height(30).spacing(20)
                 ).spacing(40)
                 .push_maybe(if self.error.is_some() && self.error == Some(Error::AdjustWhileOn) {Some(text("Please Turn off the Volume Limiter to Adjust!").color(get_rgb_color(255, 0, 0)))} else {None})
             )
@@ -529,13 +575,15 @@ impl VolControl {
                     .push(Column::new()
                         .push(Row::new()
                             .push(button(" + ").on_press(Message::ChangeByOne(true, true)))
-                            .push(text_input(&self.percent.to_string(), &self.percent_str).on_input_maybe(if !self.limiter {Some(|input| Message::ChangePercent(input, true))} else {None} )
+                            .push(text_input(&self.percent.to_string(), &self.percent_str)
+                                // .on_input_maybe(if !self.limiter {Some(|input| Message::ChangePercent(input, true))} else {None} )
+                                .on_input(|input| Message::ChangePercent(input, true))
                                 .on_submit(Message::ConfirmPercent(true))
                                 .style(
                                     move |_: &Theme, status| {
                                         match status {
                                             _ => {
-                                                if self.error == Some(Error::ParseError) && !self.limiter {
+                                                if self.error == Some(Error::ParseError) {
                                                     text_input::Style{
                                                         border: iced::Border{color: get_rgb_color(255, 0, 0), width: 1.0, ..Default::default()},
                                                         value: get_rgb_color(255, 0, 0),
@@ -547,7 +595,7 @@ impl VolControl {
                                                 } else {
                                                     text_input::Style{
                                                         border: iced::Border{color:get_rgb_color(150, 150, 150), width: 1.0, ..Default::default()},
-                                                        value: if self.limiter { get_rgb_color(150, 150, 150)} else { get_rgb_color(255, 255, 255) },
+                                                        value: get_rgb_color(255, 255, 255),
                                                         background: iced::Background::Color(get_rgb_color(100, 100, 100)),
                                                         icon: iced::Color::default(),
                                                         placeholder: get_rgb_color(200, 200, 200),
