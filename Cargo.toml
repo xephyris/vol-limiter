@@ -1,6 +1,13 @@
 [package]
 name = "vol-limiter"
 version = "0.1.0"
+description = "A cross platform GUI volume limiting application built with iced"
+readme = "README.md"
+keywords = ["audio", "cross-platform", "gui", "application"]
+repository = "https://github.com/xephyris/vol-limiter"
+license = "GPL-3.0"
+license-file = "LICENSE"
+authors = ["xephyris"]
 edition = "2024"
 
 [dependencies]
