@@ -705,9 +705,9 @@ dependencies = [
 
 [[package]]
 name = "cpvc"
-version = "0.4.0"
+version = "0.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a74576f6450defa0b9d8eba4efb0a9ff4bfa532ceba456eb01ba003e32c0bbed"
+checksum = "30cefc7f947361fa9b9b2709391ac9ab8970f8150bcdbc7dab6287399f5fda34"
 dependencies = [
  "alsa",
  "core-foundation 0.10.1",
