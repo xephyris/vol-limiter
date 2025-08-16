@@ -11,6 +11,6 @@ authors = ["xephyris"]
 edition = "2024"
 
 [dependencies]
-cpvc = "0.3.0"
+cpvc = "0.4.0"
 iced = { version = "0.13.1", features = ["tokio"] }
 iced_core = "0.13.1"
