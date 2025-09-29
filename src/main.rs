@@ -5,13 +5,13 @@ use cpvc::command::{get_sound_devices_command, get_system_volume_command, set_sy
 use cpvc::{get_sound_devices, get_system_volume, set_system_volume};
 use vol_limiter::{components::hov_container_row::{self, HovContainer}};
 
-
+// Issue: Vol-limiter won't let you choose custom vol limit if it is = to 20, 50, or 80 because of the auto selector feature
 #[derive(Debug, Clone)]
 enum Message {
     EnableLimit,
     DisableLimit,
     ChangePercent(String, bool),
-    ConfirmPercent(bool),
+    ConfirmPercent(bool, bool),
     ChangeDevice(String),
     UpdateDeviceList,
     AutoLimiter,
@@ -141,7 +141,7 @@ impl VolControl {
                             self.volume = cpvc::get_system_volume();
                             self.vol_str = self.volume.to_string();
                             Task::batch(vec![
-                                Task::perform(async {}, |_| Message::ConfirmPercent(true)),
+                                Task::perform(async {}, |_| Message::ConfirmPercent(true, false)),
                                 Task::perform(async {}, |_| Message::EnableLimit),
                             ])
                         }
@@ -186,29 +186,31 @@ impl VolControl {
                 }
                 Task::none()
             },
-            Message::ConfirmPercent(limit) => {
+            Message::ConfirmPercent(limit, manual) => {
                 if limit && !self.limiter{
                     self.percent = if let Ok(new) = self.percent_str.parse::<u8>() {if new <= 100 {new} else {100}} else {self.error = Some(Error::ParseError); self.error_length = 0; self.percent};
                     self.percent_str = self.percent.to_string();
-                    match self.percent {
-                        20 => {
-                            self.sel_lim.replace(BuiltIn::Twenty);
-                        },
-                        50 => {
-                            self.sel_lim.replace(BuiltIn::Fifty);
-                        },
-                        80 => {
-                            self.sel_lim.replace(BuiltIn::Eighty);
-                        },
-                        _ => {
-                            self.sel_lim.replace(BuiltIn::Custom);
-                        },
+                    if !manual {
+                        match self.percent {
+                            20 => {
+                                self.sel_lim.replace(BuiltIn::Twenty);
+                            },
+                            50 => {
+                                self.sel_lim.replace(BuiltIn::Fifty);
+                            },
+                            80 => {
+                                self.sel_lim.replace(BuiltIn::Eighty);
+                            },
+                            _ => {
+                                self.sel_lim.replace(BuiltIn::Custom);
+                            },
+                        }
                     }
                     Task::none()
                 } else if limit && self.limiter {
                     Task::batch(vec![
                         Task::perform(async {}, move |_| Message::DisableLimit),
-                        Task::perform(async {}, move |_| Message::ConfirmPercent(limit)),
+                        Task::perform(async {}, move |_| Message::ConfirmPercent(limit, false)),
                         Task::perform(async {}, move |_| Message::EnableLimit),
                     ])
                 } else {
@@ -328,13 +330,13 @@ impl VolControl {
                     } else if self.limiter {
                          Task::batch(vec![
                             Task::perform(async {}, move |_| Message::DisableLimit),
-                            Task::perform(async {}, move |_| Message::ConfirmPercent(limit)),
+                            Task::perform(async {}, move |_| Message::ConfirmPercent(limit,false)),
                             Task::perform(async {}, move |_| Message::ChangeByOne(increase, limit)),
                             Task::perform(async {}, move |_| Message::EnableLimit),
                         ])
                     } else {
                         Task::batch(vec![
-                            Task::perform(async {}, move |_| Message::ConfirmPercent(limit)),
+                            Task::perform(async {}, move |_| Message::ConfirmPercent(limit, false)),
                             Task::perform(async {}, move |_| Message::ChangeByOne(increase, limit)),
                         ])
                     }
@@ -352,7 +354,7 @@ impl VolControl {
                         Task::none()
                     } else {
                         Task::batch(vec![
-                            Task::perform(async {}, move |_| Message::ConfirmPercent(limit)),
+                            Task::perform(async {}, move |_| Message::ConfirmPercent(limit, false)),
                             Task::perform(async {}, move |_| Message::ChangeByOne(increase, limit)),
                         ])
                     }
@@ -397,7 +399,7 @@ impl VolControl {
                             self.percent = 80;
                         },
                         BuiltIn::Custom => {
-                            task = Task::perform(async {}, |_| Message::ConfirmPercent(true));
+                            task = Task::perform(async {}, |_| Message::ConfirmPercent(true, true));
                             change_str = false
                         },
                     }
@@ -485,7 +487,7 @@ impl VolControl {
                         } else {
                             Column::new()
                                 .push(Row::new().push(button(" + ").on_press(Message::ChangeByOne(true, false)))
-                                .push(text_input(&self.vol_str, &self.vol_str).on_input(|input| Message::ChangePercent(input, false)).on_submit(Message::ConfirmPercent(false)).style(
+                                .push(text_input(&self.vol_str, &self.vol_str).on_input(|input| Message::ChangePercent(input, false)).on_submit(Message::ConfirmPercent(false, true)).style(
                                     move |_: &Theme, status| {
                                         match status {
                                             _ => {
@@ -535,7 +537,7 @@ impl VolControl {
                                 text_input(&self.percent.to_string(), &self.percent_str)
                                     // .on_input_maybe(if !self.limiter {Some(|input| Message::ChangePercent(input, true))} else {None} )
                                     .on_input(|input| Message::ChangePercent(input, true))
-                                    .on_submit(Message::ConfirmPercent(true))
+                                    .on_submit(Message::ConfirmPercent(true, false))
                                     .size(14)
                                     .style(
                                         move |_: &Theme, status| {
@@ -586,7 +588,7 @@ impl VolControl {
                             .push(text_input(&self.percent.to_string(), &self.percent_str)
                                 // .on_input_maybe(if !self.limiter {Some(|input| Message::ChangePercent(input, true))} else {None} )
                                 .on_input(|input| Message::ChangePercent(input, true))
-                                .on_submit(Message::ConfirmPercent(true))
+                                .on_submit(Message::ConfirmPercent(true, false))
                                 .style(
                                     move |_: &Theme, status| {
                                         match status {
