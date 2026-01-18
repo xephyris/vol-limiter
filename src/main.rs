@@ -1,7 +1,7 @@
 use std::{sync::{mpsc::{self, Receiver, Sender}, Arc, Mutex}, thread::{self, JoinHandle}, time::Duration};
 use iced::{application, widget::{button, pick_list, radio, slider, text, text_input, toggler, vertical_space, Column, Row}, Alignment, Element, Length, Size, Subscription, Task, Theme};
-use vol_limiter::styles::{get_rgb_color};
-use cpvc::command::{get_sound_devices_command, get_system_volume_command, set_system_volume_command};
+use vol_limiter::{VolumeCommand, command_handler, styles::get_rgb_color};
+// use cpvc::command::{get_sound_devices_command, get_system_volume_command, set_system_volume_command};
 use cpvc::{get_sound_devices, get_system_volume, set_system_volume};
 use vol_limiter::{components::hov_container_row::{self, HovContainer}};
 
@@ -76,13 +76,17 @@ struct VolControl {
     sel_lim: Option<BuiltIn>,
     volume: u8, 
     vol_str: String,
+    cmd_tx: Sender<VolumeCommand>,
+    cmd_rx: Receiver<VolumeCommand>,
+    cmd_handler: JoinHandle<()>, 
 }
 
+// Do not use, cannot provide cmd_tx, cmd_rx
 impl Default for VolControl {
     fn default() -> Self {
-        let mut device_list = Vec::from(["".to_owned()]);
-        
-        device_list.append(&mut get_sound_devices());
+        let device_list = Vec::from(["".to_owned()]);
+        let (tx, rx) = mpsc::channel();
+        // device_list.append(&mut get_sound_devices());
         let copy = device_list.clone();
         Self { 
             limiter: false, 
@@ -104,8 +108,47 @@ impl Default for VolControl {
             auto_autolimiter: true,
             input_vol: Some(InputType::Slider),
             sel_lim: Some(BuiltIn::Twenty),
-            volume: get_system_volume(),
-            vol_str: get_system_volume().to_string(),
+            volume: 0,
+            vol_str: 0.to_string(),
+            cmd_tx: tx,
+            cmd_rx: rx,
+            cmd_handler: thread::spawn(|| {})
+        }
+    }
+}
+
+impl VolControl {
+    pub fn new(cmd_tx: Sender<VolumeCommand>, cmd_rx: Receiver<VolumeCommand>, cmd_handler: JoinHandle<()>) -> Self {
+        cmd_tx.send(VolumeCommand::GetDevices(None));
+        let device_list = if let Ok(VolumeCommand::GetDevices(Some(devices))) = cmd_rx.recv() {devices} else {vec![]};
+        cmd_tx.send(VolumeCommand::GetVol(None));
+        let curr_vol = if let Ok(VolumeCommand::GetVol(Some(vol))) = cmd_rx.recv() {(vol * 100.0) as u8} else {0};
+        let copy = device_list.clone();
+        Self { 
+            limiter: false, 
+            percent: 20, 
+            percent_str: 20.to_string(),
+            all_devices: device_list.clone(),
+            devices: device_list,
+            device: Some(String::new()),
+            runner: None,
+            scanner: None,
+            autocheck: false,
+            tx_limiter: None,
+            tx_scanner: None,
+            mutex: Arc::new(Mutex::new(copy)),
+            thread_count: Arc::new(Mutex::new(0)),
+            error: None,
+            error_length: 0,
+            autolimiter: true,
+            auto_autolimiter: true,
+            input_vol: Some(InputType::Slider),
+            sel_lim: Some(BuiltIn::Twenty),
+            volume: curr_vol,
+            vol_str: curr_vol.to_string(),
+            cmd_tx,
+            cmd_rx,
+            cmd_handler,
         }
     }
 }
@@ -130,16 +173,16 @@ impl VolControl {
                             self.limiter = true;
                             tx.send(true).unwrap();
                             self.runner.replace(enable_limiter(percent, rx));
-                            self.volume = if get_system_volume() < self.percent {
-                                    get_system_volume()
-                                } else {
-                                    self.percent
-                                };
+                            // self.volume = if get_system_volume() < self.percent {
+                            //         get_system_volume()
+                            //     } else {
+                            //         self.percent
+                            //     };
                             self.vol_str = self.volume.to_string();
                             Task::none()
                         } else {
-                            self.volume = cpvc::get_system_volume();
-                            self.vol_str = self.volume.to_string();
+                            // self.volume = // cpvc::get_system_volume();
+                            // self.vol_str = self.volume.to_string();
                             Task::batch(vec![
                                 Task::perform(async {}, |_| Message::ConfirmPercent(true, false)),
                                 Task::perform(async {}, |_| Message::EnableLimit),
@@ -221,7 +264,7 @@ impl VolControl {
                         self.volume = if let Ok(new) = self.vol_str.parse::<u8>() {if new <= self.percent {new} else {self.percent}} else {self.error = Some(Error::ParseError); self.error_length = 0; self.volume};
                         self.vol_str = self.volume.to_string();
                     }
-                    set_system_volume(self.volume);
+                    // set_system_volume(self.volume);
                     Task::none()
                 }
             }
@@ -242,7 +285,7 @@ impl VolControl {
                             self.all_devices.push(String::from(device));
                         }
                     } 
-                    self.devices = get_sound_devices();
+                    // self.devices = get_sound_devices();
                 }     
                 Task::none()   
             }
@@ -281,9 +324,9 @@ impl VolControl {
                                 while !rx.try_recv().is_ok() {
                                     thread::sleep(Duration::from_secs(1));
                                     let mut muter = clone.lock().unwrap();
-                                    if get_sound_devices().len() != muter.len() {
-                                        *muter = get_sound_devices();
-                                    }
+                                    // if get_sound_devices().len() != muter.len() {
+                                    //     *muter = get_sound_devices();
+                                    // }
                                 }
                             })
                         );
@@ -349,7 +392,7 @@ impl VolControl {
                         } else if self.volume > 0 {
                             self.volume -= 1;
                         }
-                        cpvc::set_system_volume(self.volume);
+                        // cpvc::set_system_volume(self.volume);
                         self.vol_str = self.volume.to_string();
                         Task::none()
                     } else {
@@ -361,10 +404,10 @@ impl VolControl {
                 }
             },
             Message::SystemVolChange => {
-                if cpvc::get_system_volume() != self.volume {
-                    self.volume = cpvc::get_system_volume();
-                    self.vol_str = self.volume.to_string();
-                }
+                // if // cpvc::get_system_volume() != self.volume {
+                //     self.volume = // cpvc::get_system_volume();
+                //     self.vol_str = self.volume.to_string();
+                // }
                 Task::none()
             },
             Message::SliderVolChange(volume, limit) => {
@@ -374,7 +417,7 @@ impl VolControl {
                     }
                 } else {
                     if volume != self.volume {
-                        set_system_volume(volume);
+                        // set_system_volume(volume);
                         self.volume = volume;
                         self.vol_str = self.volume.to_string();
                     }
@@ -667,7 +710,7 @@ fn enable_limiter(percent: u8, rx: Receiver<bool>) -> JoinHandle<()> {
         }
         while limit {
             // println!("Blocking!");
-            // println!("Current System volume is: {}", get_system_volume_command());
+            // println!("Current System volume is: {}", get_system_volume());
             if get_system_volume() > percent {
                 set_system_volume(percent);
             }
@@ -687,8 +730,10 @@ fn disable_limiter(tx:Sender<bool>) {
 }
 
 fn main() -> iced::Result{
-    get_sound_devices();
-    application("Volume Limiter", VolControl::update, VolControl::view).subscription(VolControl::subscription).theme(VolControl::theme).window_size(Size{width:550.0, height:900.0}).run()
-    // println!("{}", max_area(Vec::from([1,12,6,2,10,4,8,3])));
+    // get_sound_devices();
+    let (process_tx, cmd_rx) = mpsc::channel();
+    let (cmd_tx, process_rx) = mpsc::channel();
+    let cmd_handler = command_handler(process_tx, process_rx);
+    iced::application("Volume Limiter", VolControl::update, VolControl::view).theme(VolControl::theme).window_size(Size{width:550.0, height:900.0}).run_with(|| { (VolControl::new(cmd_tx, cmd_rx, cmd_handler), Task::none()) })
     // Ok(())
 }
