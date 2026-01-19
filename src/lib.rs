@@ -1,4 +1,4 @@
-use std::{sync::mpsc::{Sender, Receiver}, thread::{self, JoinHandle}};
+use std::{sync::mpsc::{Receiver, Sender}, thread::{self, JoinHandle}, time::Duration};
 
 pub mod components;
 pub mod styles;
@@ -16,6 +16,7 @@ pub enum VolumeCommand {
 pub fn command_handler(tx: Sender<VolumeCommand>, rx: Receiver<VolumeCommand>) -> JoinHandle<()> {
     thread::spawn(move || {
         loop {
+            thread::sleep(Duration::from_millis(100));
             if let Ok(command) = rx.try_recv() {
                 match command {
                     VolumeCommand::GetVol(_ignore) => {
