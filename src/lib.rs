@@ -9,10 +9,11 @@ pub enum VolumeCommand {
     SetVol(Option<f32>),
     GetDevices(Option<Vec<String>>),
     GetMute(Option<bool>),
-    SetMute(Option<bool>)
+    SetMute(Option<bool>),
+    Failed,
 }
 
-pub fn command_handler(mut tx: Sender<VolumeCommand>, mut rx: Receiver<VolumeCommand>) -> JoinHandle<()> {
+pub fn command_handler(tx: Sender<VolumeCommand>, rx: Receiver<VolumeCommand>) -> JoinHandle<()> {
     thread::spawn(move || {
         loop {
             if let Ok(command) = rx.try_recv() {
@@ -44,6 +45,9 @@ pub fn command_handler(mut tx: Sender<VolumeCommand>, mut rx: Receiver<VolumeCom
                             tx.send(VolumeCommand::SetMute(Some(false))).unwrap();
                         }
                     },
+                    VolumeCommand::Failed => {
+
+                    }
                 }
             }
         }

@@ -1,5 +1,5 @@
 use std::{sync::{mpsc::{self, Receiver, Sender}, Arc, Mutex}, thread::{self, JoinHandle}, time::Duration};
-use iced::{application, widget::{button, pick_list, radio, slider, text, text_input, toggler, vertical_space, Column, Row}, Alignment, Element, Length, Size, Subscription, Task, Theme};
+use iced::{widget::{button, pick_list, radio, slider, text, text_input, toggler, vertical_space, Column, Row}, Alignment, Element, Length, Size, Subscription, Task, Theme};
 use vol_limiter::{VolumeCommand, command_handler, styles::get_rgb_color};
 // use cpvc::command::{get_sound_devices_command, get_system_volume_command, set_system_volume_command};
 use cpvc::{get_sound_devices, get_system_volume, set_system_volume};
@@ -78,7 +78,6 @@ struct VolControl {
     vol_str: String,
     cmd_tx: Sender<VolumeCommand>,
     cmd_rx: Receiver<VolumeCommand>,
-    cmd_handler: JoinHandle<()>, 
 }
 
 // Do not use, cannot provide cmd_tx, cmd_rx
@@ -112,17 +111,26 @@ impl Default for VolControl {
             vol_str: 0.to_string(),
             cmd_tx: tx,
             cmd_rx: rx,
-            cmd_handler: thread::spawn(|| {})
         }
     }
 }
 
 impl VolControl {
-    pub fn new(cmd_tx: Sender<VolumeCommand>, cmd_rx: Receiver<VolumeCommand>, cmd_handler: JoinHandle<()>) -> Self {
-        cmd_tx.send(VolumeCommand::GetDevices(None));
-        let device_list = if let Ok(VolumeCommand::GetDevices(Some(devices))) = cmd_rx.recv() {devices} else {vec![]};
-        cmd_tx.send(VolumeCommand::GetVol(None));
-        let curr_vol = if let Ok(VolumeCommand::GetVol(Some(vol))) = cmd_rx.recv() {(vol * 100.0) as u8} else {0};
+    pub fn new(mut cmd_tx: Sender<VolumeCommand>, mut cmd_rx: Receiver<VolumeCommand>) -> Self {
+        let device_list = {
+            if let VolumeCommand::GetDevices(Some(devices)) = VolControl::send_command_with_tx_rx(&mut cmd_tx, &mut cmd_rx, VolumeCommand::GetDevices(None)) {
+                devices
+            } else {
+                vec![]
+            }
+        };
+        let curr_vol = {
+            if let VolumeCommand::GetVol(Some(vol)) = VolControl::send_command_with_tx_rx(&mut cmd_tx, &mut cmd_rx, VolumeCommand::GetVol(None)) { 
+                (vol * 100.0) as u8
+            } else {
+                0
+            }
+        };
         let copy = device_list.clone();
         Self { 
             limiter: false, 
@@ -148,7 +156,6 @@ impl VolControl {
             vol_str: curr_vol.to_string(),
             cmd_tx,
             cmd_rx,
-            cmd_handler,
         }
     }
 }
@@ -158,8 +165,7 @@ impl VolControl {
         match message {
             Message::EnableLimit => {
                     println!("limiter {:?} runner{:?}", self.tx_limiter, self.runner);
-                    if self.tx_limiter.is_none() && self.runner.is_none(){
-                
+                    if self.tx_limiter.is_none() && self.runner.is_none() {
                         // if self.tx.is_none() && self.rx.is_none() {
                         //     let (tx, rx) = mpsc::channel();
                         //     self.tx = Some(tx.clone());
@@ -173,16 +179,25 @@ impl VolControl {
                             self.limiter = true;
                             tx.send(true).unwrap();
                             self.runner.replace(enable_limiter(percent, rx));
-                            // self.volume = if get_system_volume() < self.percent {
-                            //         get_system_volume()
-                            //     } else {
-                            //         self.percent
-                            //     };
+                            let volume = if let VolumeCommand::GetVol(Some(vol)) = self.send_command(VolumeCommand::GetVol(None)) { 
+                                (vol * 100.0) as u8
+                            } else {
+                                0
+                            };
+                            self.volume = if volume < self.percent {
+                                volume
+                            } else {
+                                self.percent
+                            };
                             self.vol_str = self.volume.to_string();
                             Task::none()
                         } else {
-                            // self.volume = // cpvc::get_system_volume();
-                            // self.vol_str = self.volume.to_string();
+                            self.volume = if let VolumeCommand::GetVol(Some(vol)) = self.send_command(VolumeCommand::GetVol(None)) { 
+                                (vol * 100.0) as u8
+                            } else {
+                                0
+                            };
+                            self.vol_str = self.volume.to_string();
                             Task::batch(vec![
                                 Task::perform(async {}, |_| Message::ConfirmPercent(true, false)),
                                 Task::perform(async {}, |_| Message::EnableLimit),
@@ -264,7 +279,7 @@ impl VolControl {
                         self.volume = if let Ok(new) = self.vol_str.parse::<u8>() {if new <= self.percent {new} else {self.percent}} else {self.error = Some(Error::ParseError); self.error_length = 0; self.volume};
                         self.vol_str = self.volume.to_string();
                     }
-                    // set_system_volume(self.volume);
+                    self.send_command(VolumeCommand::SetVol(Some(self.volume as f32 * 100.0)));
                     Task::none()
                 }
             }
@@ -285,7 +300,11 @@ impl VolControl {
                             self.all_devices.push(String::from(device));
                         }
                     } 
-                    // self.devices = get_sound_devices();
+                    self.devices = if let VolumeCommand::GetDevices(Some(devices)) = self.send_command(VolumeCommand::GetDevices(None)) {
+                        devices
+                    } else {
+                        self.devices.clone()
+                    };
                 }     
                 Task::none()   
             }
@@ -324,9 +343,9 @@ impl VolControl {
                                 while !rx.try_recv().is_ok() {
                                     thread::sleep(Duration::from_secs(1));
                                     let mut muter = clone.lock().unwrap();
-                                    // if get_sound_devices().len() != muter.len() {
-                                    //     *muter = get_sound_devices();
-                                    // }
+                                    if get_sound_devices().len() != muter.len() {
+                                        *muter = get_sound_devices();
+                                    }
                                 }
                             })
                         );
@@ -392,7 +411,7 @@ impl VolControl {
                         } else if self.volume > 0 {
                             self.volume -= 1;
                         }
-                        // cpvc::set_system_volume(self.volume);
+                        self.send_command(VolumeCommand::SetVol(Some(self.volume as f32 / 100.0)));
                         self.vol_str = self.volume.to_string();
                         Task::none()
                     } else {
@@ -404,10 +423,10 @@ impl VolControl {
                 }
             },
             Message::SystemVolChange => {
-                // if // cpvc::get_system_volume() != self.volume {
-                //     self.volume = // cpvc::get_system_volume();
-                //     self.vol_str = self.volume.to_string();
-                // }
+                if let VolumeCommand::GetVol(Some(vol)) = self.send_command(VolumeCommand::GetVol(None)) && (vol * 100.0) as u8 != self.volume {
+                    self.volume = (vol * 100.0) as u8;
+                    self.vol_str = self.volume.to_string();
+                }
                 Task::none()
             },
             Message::SliderVolChange(volume, limit) => {
@@ -417,7 +436,7 @@ impl VolControl {
                     }
                 } else {
                     if volume != self.volume {
-                        // set_system_volume(volume);
+                        self.send_command(VolumeCommand::SetVol(Some(volume as f32 / 100.0)));
                         self.volume = volume;
                         self.vol_str = self.volume.to_string();
                     }
@@ -491,16 +510,17 @@ impl VolControl {
                 }
             },
             Message::OnPick(device) => {
-                Task::batch(vec! [
-                    Task::perform(async {}, |_| Message::ChangeAutoAutoLimiter(true)),
-                    Task::perform(async {}, move |_| Message::ChangeDevice(device.clone())),
-                ]
+                Task::batch(
+                    vec! [
+                        Task::perform(async {}, |_| Message::ChangeAutoAutoLimiter(true)),
+                        Task::perform(async {}, move |_| Message::ChangeDevice(device.clone())),
+                    ]
                 )
             },
         }
     }
     // NextUI
-    pub fn view(&self) -> Element<Message> {
+    pub fn view(&self) -> Element<'_, Message> {
         Column::new().push(text("Volume Limiter").center().size(20).width(Length::Fill)).push(
             HovContainer::new()
             .push(Column::new()
@@ -689,12 +709,30 @@ impl VolControl {
 
     pub fn subscription(&self) -> Subscription<Message>{
         Subscription::batch(vec![
-            // iced::time::every(std::time::Duration::from_secs(1)).map(|_| Message::UpdateDeviceList),
-            // iced::time::every(std::time::Duration::from_secs(1)).map(|_| Message::AutoLimiter),
+            iced::time::every(std::time::Duration::from_secs(10)).map(|_| Message::UpdateDeviceList),
+            iced::time::every(std::time::Duration::from_secs(5)).map(|_| Message::AutoLimiter),
             iced::time::every(std::time::Duration::from_millis(500)).map(|_| Message::SystemVolChange),
             iced::time::every(std::time::Duration::from_secs(1)).map(|_| Message::ClearError),
         ])
         
+    }
+
+    fn send_command(&mut self, command: VolumeCommand) -> VolumeCommand {
+        self.cmd_tx.send(command).expect("Failed to send command");
+        if let Ok(command) = self.cmd_rx.recv() {
+            command
+        } else {
+            VolumeCommand::Failed
+        }
+    }
+
+    fn send_command_with_tx_rx(cmd_tx: &mut Sender<VolumeCommand>, cmd_rx: &mut Receiver<VolumeCommand>, command: VolumeCommand) -> VolumeCommand {
+        cmd_tx.send(command).expect("Failed to send command");
+        if let Ok(command) = cmd_rx.recv() {
+            command
+        } else {
+            VolumeCommand::Failed
+        }
     }
 
 }
@@ -733,7 +771,7 @@ fn main() -> iced::Result{
     // get_sound_devices();
     let (process_tx, cmd_rx) = mpsc::channel();
     let (cmd_tx, process_rx) = mpsc::channel();
-    let cmd_handler = command_handler(process_tx, process_rx);
-    iced::application("Volume Limiter", VolControl::update, VolControl::view).theme(VolControl::theme).window_size(Size{width:550.0, height:900.0}).run_with(|| { (VolControl::new(cmd_tx, cmd_rx, cmd_handler), Task::none()) })
+    let _cmd_handler = command_handler(process_tx, process_rx);
+    iced::application("Volume Limiter", VolControl::update, VolControl::view).theme(VolControl::theme).subscription(VolControl::subscription).window_size(Size{width:550.0, height:900.0}).run_with(|| { (VolControl::new(cmd_tx, cmd_rx), Task::none()) })
     // Ok(())
 }
